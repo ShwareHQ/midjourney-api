@@ -1,10 +1,10 @@
 import 'dotenv/config';
 import fs from 'fs';
-import readline from 'readline';
-import AWS from 'aws-sdk';
-import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
+import readline from 'readline';
 import { PassThrough } from 'stream';
+import { Upload } from "@aws-sdk/lib-storage";
+import { S3Client } from "@aws-sdk/client-s3";
 import { Midjourney } from "../src";
 
 interface Generated {
@@ -18,7 +18,7 @@ async function completion(prompt: string): Promise<Generated | null> {
     ChannelId: <string>process.env.CHANNEL_ID,
     SalaiToken: <string>process.env.SALAI_TOKEN,
     HuggingFaceToken: <string>process.env.HUGGINGFACE_TOKEN,
-    Debug: true,
+    Debug: false,
     Ws: true,
   });
   await client.init();
@@ -27,12 +27,8 @@ async function completion(prompt: string): Promise<Generated | null> {
     upscaleImageUrls: [],
   };
 
-  const message = await client.Imagine(
-    prompt,
-    (uri: string, progress: string) => {
-      console.log("loading", uri, "progress", progress);
-    }
-  );
+  const loadingHandler = (_: string, progress: string) => console.log("Loading progress:", progress);
+  const message = await client.Imagine(prompt, loadingHandler);
   if(!message) return null;
   result.previewImageUrl = message.uri;
   const indexs: number[] = [1,2,3,4];
@@ -42,9 +38,7 @@ async function completion(prompt: string): Promise<Generated | null> {
       i,
       <string>message.id,
       <string>message.hash,
-      (uri: string, progress: string) => {
-        console.log("loading", uri, "progress", progress);
-      }
+      loadingHandler
     );
     if(upscale) {
       result.upscaleImageUrls.push(upscale.uri);
@@ -59,30 +53,31 @@ interface Line {
   prompt: string;
 }
 
-const s3 = new AWS.S3({
-  region: <string>process.env.AWS_REGION,
-  accessKeyId: <string>process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: <string>process.env.AWS_SECRET_ACCESS_KEY,
-});
+const client = new S3Client({ region: <string>process.env.AWS_REGION });
 
 async function uploadUrl(key: string, url: string) {
   const stream = await axios.get(url, { responseType: 'stream' });
   const passThrough = new PassThrough();
-  s3.upload({
-    Key: key,
-    Bucket: 'pipencil-content',
-    CacheControl: 'max-age=31536000',
-    ContentType: 'image/png',
-    Body: passThrough,
-  }, (error, data) => {
-    if(error) {
-      console.error(error);
-      return
-    }
-    console.log('File upload successfully:', data.Location);
+  const upload = new Upload({
+    client,
+    params: {
+      Key: `midjourney/${key}`,
+      Bucket: 'pipencil-content',
+      CacheControl: 'max-age=31536000',
+      ContentType: 'image/png',
+      Body: passThrough,
+    },
+    queueSize: 4, // optional concurrency configuration
+    partSize: 1024 * 1024 * 5, // optional size of each part, in bytes, at least 5MB
+    leavePartsOnError: false, // optional manually handle dropped parts
+  });
+
+  upload.on('httpUploadProgress', (progress) => {
+    console.log(`Uploading ${key} part: ${progress.part}`);
   });
 
   stream.data.pipe(passThrough);
+  await upload.done();
 }
 
 const repeat = 2;
@@ -108,3 +103,5 @@ async function processLineByLine() {
     }
   }
 }
+
+processLineByLine().then(() => console.log('Done!'));
