@@ -81,7 +81,7 @@ async function uploadUrl(key: string, url: string) {
   await upload.done();
 }
 
-const repeat = 2;
+const repeat = 1;
 const startLine = 0;
 
 async function processLineByLine() {
