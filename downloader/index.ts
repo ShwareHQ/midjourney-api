@@ -51,6 +51,7 @@ interface Line {
   id: string;
   style: string;
   prompt: string;
+  seed: number;
 }
 
 const client = new S3Client({ region: <string>process.env.AWS_REGION });
@@ -81,26 +82,35 @@ async function uploadUrl(key: string, url: string) {
 }
 
 const repeat = 2;
+const startLine = 0;
 
 async function processLineByLine() {
-  const stream = fs.createReadStream('./downloader/test.jsonl');
+  const stream = fs.createReadStream('./downloader/prompts_with_seed.jsonl');
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-
-  for await (const line of rl) {
-    for(let i = 0; i < repeat; i++) {
-      const request = JSON.parse(line) as Line;
-      const result = await completion(request.prompt);
-      if(!result) continue;
-      // style_a/prompt_id_preview_{i}
-      // style_a/prompt_id_upscale_{i}_0
-      // style_a/prompt_id_upscale_{i}_1
-      // style_a/prompt_id_upscale_{i}_2
-      // style_a/prompt_id_upscale_{i}_3
-      await uploadUrl(`${request.style}/${request.id}_preview_${i}`, result.previewImageUrl);
-      for (const [j, url] of result.upscaleImageUrls.entries()) {
-        await uploadUrl(`${request.style}/${request.id}_upscale_${i}_${j}`, url);
+  let lineCount = 0;
+  try {
+    for await (const line of rl) {
+      lineCount++;
+      if (lineCount < startLine) continue;
+      console.log(`Line: ${lineCount} ----------------------------------------------------------------------`);
+      for(let i = 0; i < repeat; i++) {
+        const request = JSON.parse(line) as Line;
+        const result = await completion(`${request.prompt} --seed ${request.seed}`);
+        if(!result) continue;
+        // style_a/prompt_id_preview_{i}
+        // style_a/prompt_id_upscale_{i}_0
+        // style_a/prompt_id_upscale_{i}_1
+        // style_a/prompt_id_upscale_{i}_2
+        // style_a/prompt_id_upscale_{i}_3
+        await uploadUrl(`${request.style}/${request.id}_preview_${i}`, result.previewImageUrl);
+        for (const [j, url] of result.upscaleImageUrls.entries()) {
+          await uploadUrl(`${request.style}/${request.id}_upscale_${i}_${j}`, url);
+        }
       }
     }
+  } catch(e) {
+    console.log('stop at line:', lineCount);
+    console.error('process failed:', e);
   }
 }
 
