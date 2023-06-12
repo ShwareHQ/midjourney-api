@@ -83,29 +83,40 @@ async function uploadUrl(key: string, url: string) {
 
 const repeat = 1;
 const startLine = 0;
+const concurrency = 12;
 
-async function processLineByLine() {
-  const stream = fs.createReadStream('./downloader/prompts_with_seed.jsonl');
+// style_a/prompt_id_preview_{i}
+// style_a/prompt_id_upscale_{i}_0
+// style_a/prompt_id_upscale_{i}_1
+// style_a/prompt_id_upscale_{i}_2
+// style_a/prompt_id_upscale_{i}_3
+async function processLine(line: string) {
+  const request = JSON.parse(line) as Line;
+  for(let i = 0; i < repeat; i++) {
+    const result = await completion(`${request.prompt} --seed ${request.seed}`);
+    if(!result) continue;
+    await uploadUrl(`${request.style}/${request.id}_preview_${i}`, result.previewImageUrl);
+    for (const [j, url] of result.upscaleImageUrls.entries()) {
+      await uploadUrl(`${request.style}/${request.id}_upscale_${i}_${j}`, url);
+    }
+  }
+}
+
+async function processJSONL(path: string) {
+  const stream = fs.createReadStream(path);
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   let lineCount = 0;
+  let tasks: Promise<void>[] = [];
   try {
     for await (const line of rl) {
       lineCount++;
-      if (lineCount < startLine) continue;
-      console.log(`Line: ${lineCount} ----------------------------------------------------------------------`);
-      for(let i = 0; i < repeat; i++) {
-        const request = JSON.parse(line) as Line;
-        const result = await completion(`${request.prompt} --seed ${request.seed}`);
-        if(!result) continue;
-        // style_a/prompt_id_preview_{i}
-        // style_a/prompt_id_upscale_{i}_0
-        // style_a/prompt_id_upscale_{i}_1
-        // style_a/prompt_id_upscale_{i}_2
-        // style_a/prompt_id_upscale_{i}_3
-        await uploadUrl(`${request.style}/${request.id}_preview_${i}`, result.previewImageUrl);
-        for (const [j, url] of result.upscaleImageUrls.entries()) {
-          await uploadUrl(`${request.style}/${request.id}_upscale_${i}_${j}`, url);
-        }
+      if (lineCount < startLine) continue;      
+      if(tasks.length < concurrency) {
+        tasks.push(processLine(line));
+      } else {
+        console.log(`Line: ${lineCount - concurrency} ----------------------------------------------------------------------`);
+        await Promise.all(tasks);
+        tasks = [];
       }
     }
   } catch(e) {
@@ -114,4 +125,4 @@ async function processLineByLine() {
   }
 }
 
-processLineByLine().then(() => console.log('Done!'));
+processJSONL('./downloader/prompts_with_seed_v2.jsonl').then(() => console.log('Done!'));
