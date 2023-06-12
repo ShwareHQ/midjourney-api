@@ -133,5 +133,3 @@ dist
 # Directory for build generated files
 libs
 .idea
-
-.devcontainer
